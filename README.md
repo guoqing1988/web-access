@@ -38,6 +38,7 @@ AI Agent 原本的联网能力（WebSearch、WebFetch）缺少调度策略和浏
 | 联网工具自动选择 | WebSearch / WebFetch / curl / Jina / CDP，按场景自主判断，可任意组合 |
 | CDP Proxy 浏览器操作 | 直连用户日常浏览器（Chrome / Edge / Chromium 系），天然携带登录态，支持动态页面、交互操作、视频截帧 |
 | 三种点击方式 | `/click`（JS click）、`/clickAt`（CDP 真实鼠标事件）、`/setFiles`（文件上传） |
+| 设备模拟切换 | `/device` — 一条 curl 切换 iphone/android/desktop 视口（含 DPR/移动 UA/触摸），自动 reload 并返回验证结果；也可自定义宽高 |
 | 本地浏览器书签/历史检索 | `find-url.mjs` 跨 Chrome / Edge 查询公网搜不到的目标（内部系统）或用户访问过的页面，支持关键词/时间窗/访问频度排序 |
 | 并行分治 | 多目标时分发子 Agent 并行执行，共享一个 Proxy，tab 级隔离 |
 | 站点经验积累 | 按域名存储操作经验（URL 模式、平台特征、已知陷阱），跨 session 复用 |
@@ -47,6 +48,9 @@ AI Agent 原本的联网能力（WebSearch、WebFetch）缺少调度策略和浏
 - **修复新标签页空白竞态** — `/new` 先创建 `about:blank` 并完成 CDP attach，再显式导航；不再把浏览器初始空白文档误判为目标页面
 - **目标内容就绪契约** — 导航成功或 `readyState` 完成不等于任务完成；遇到验证页、登录跳转和异步渲染时继续观察，直到目标内容出现或确认受阻
 - **完整 URL 安全传输** — `/new` 和 `/navigate` 从 v2.5.3 起使用 POST body 传 URL，查询参数中的 `&` 不再被错误切分
+
+**本地增强（fork 补丁，非官方）：**
+- **`/device` 设备模拟端点** — 与 `/eval`、`/screenshot` 共用同一 CDP session（Emulation 是 per-session），切换视口/UA/触摸后 proxy 各端点一致生效；支持 `iphone`/`android`/`desktop`/`clear` 预设与自定义宽高，自动 reload + 返回验证结果
 
 <details><summary>v2.5.2 更新</summary>
 
@@ -175,7 +179,14 @@ curl -s "http://localhost:3456/screenshot?target=ID&file=/tmp/shot.png"     # �
 curl -s "http://localhost:3456/scroll?target=ID&direction=bottom"           # 滚动
 curl -s "http://localhost:3456/close?target=ID"                             # 关闭 tab
 curl -s "http://localhost:3456/health"                                      # 查看状态（含 managedTabs 数量）
+# 设备模拟（本地增强）
+curl -s -X POST "http://localhost:3456/device?target=ID" -d '{"preset":"iphone"}'   # 切 iPhone 视口（390x844 DPR3 + 移动 UA + 触摸）
+curl -s -X POST "http://localhost:3456/device?target=ID" -d '{"preset":"desktop"}' # 切桌面（1440x900）
+curl -s -X POST "http://localhost:3456/device?target=ID" -d '{"preset":"clear"}'    # 还原真实视口（用后必还原）
+curl -s -X POST "http://localhost:3456/device?target=ID" -d '{"width":768,"height":1024,"dpr":2,"mobile":true}'  # 自定义视口
 ```
+
+`/device` 切换后自动 reload，响应中 `verified` 字段返回实际生效的宽高/DPR/移动 UA/触摸，可直接判读；`clear` 还原真实视口。
 
 Proxy 会自动追踪通过 `/new` 创建的 tab，闲置 15 分钟后自动关闭，防止 Agent 异常退出时留下孤儿 tab。可通过环境变量 `CDP_TAB_IDLE_TIMEOUT`（单位毫秒）调整超时时间。
 
