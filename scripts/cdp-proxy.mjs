@@ -594,6 +594,62 @@ const server = http.createServer(async (req, res) => {
       res.end(resp.result?.result?.value || '{}');
     }
 
+    // POST /device?target=xxx - 设备模拟切换(body 为 JSON)
+    //   {"preset":"iphone"|"android"|"desktop"|"clear"} 或自定义 {"width":390,"height":844,"dpr":3,"mobile":true,"ua":"..."}
+    // 与 /eval、/screenshot 共用同一 CDP session(Emulation 是 per-session),切换后 proxy 全端点一致生效
+    else if (pathname === '/device') {
+      const sid = await ensureSession(q.target);
+      let cfg = {};
+      try { cfg = JSON.parse((await readBody(req)) || '{}'); } catch { cfg = {}; }
+
+      const PRESETS = {
+        iphone: { width: 390, height: 844, dpr: 3, mobile: true, ua: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1' },
+        android: { width: 412, height: 915, dpr: 2.6, mobile: true, ua: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36' },
+        desktop: { width: 1440, height: 900, dpr: 1, mobile: false, ua: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36' },
+      };
+
+      if (cfg.preset === 'clear') {
+        await sendCDP('Emulation.clearDeviceMetricsOverride', {}, sid);
+        res.end(JSON.stringify({ ok: true, action: 'clear' }));
+        return;
+      }
+      if (cfg.preset && PRESETS[cfg.preset]) {
+        cfg = { ...PRESETS[cfg.preset], ...cfg };
+      }
+      if (!cfg.width || !cfg.height) {
+        res.statusCode = 400;
+        res.end(JSON.stringify({ error: '需要 preset(iphone/android/desktop/clear) 或自定义 width/height' }));
+        return;
+      }
+
+      const mobile = !!cfg.mobile;
+      await sendCDP('Emulation.setDeviceMetricsOverride', {
+        width: cfg.width, height: cfg.height,
+        deviceScaleFactor: cfg.dpr || 1, mobile,
+        screenOrientation: mobile ? { type: 'portraitPrimary', angle: 0 } : undefined,
+      }, sid);
+      if (cfg.ua) {
+        await sendCDP('Emulation.setUserAgentOverride', { userAgent: cfg.ua, platform: mobile ? 'iPhone' : '', mobile }, sid);
+      }
+      await sendCDP('Emulation.setTouchEmulationEnabled', { enabled: mobile, maxTouchPoints: mobile ? 5 : 1 }, sid);
+      // reload 使视口/UA/触摸生效
+      await sendCDP('Page.reload', { ignoreCache: true }, sid);
+      await waitForLoad(sid);
+      // 同 session 验证(返回可直接判读的结果)
+      const v = await sendCDP('Runtime.evaluate', {
+        expression: 'JSON.stringify({ width: innerWidth, height: innerHeight, dpr: devicePixelRatio, uaMobile: /Mobile|iPhone|Android/i.test(navigator.userAgent), touch: "ontouchstart" in window })',
+        returnByValue: true,
+      }, sid);
+      let verified = {};
+      try { verified = JSON.parse(v.result?.result?.value || '{}'); } catch {}
+      res.end(JSON.stringify({
+        ok: true,
+        preset: cfg.preset || 'custom',
+        applied: { width: cfg.width, height: cfg.height, dpr: cfg.dpr || 1, mobile },
+        verified,
+      }));
+    }
+
     else {
       res.statusCode = 404;
       res.end(JSON.stringify({
@@ -610,6 +666,7 @@ const server = http.createServer(async (req, res) => {
           '/click?target=': 'POST body=CSS选择器 - 点击元素',
           '/scroll?target=&y=&direction=': 'GET - 滚动页面',
           '/screenshot?target=&file=': 'GET - 截图',
+          '/device?target=': 'POST body=JSON - 设备模拟(iphone/android/desktop/clear 或自定义宽高)',
         },
       }));
     }

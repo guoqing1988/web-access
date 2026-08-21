@@ -57,6 +57,17 @@ curl -s "http://localhost:3456/back?target=ID"
 curl -s "http://localhost:3456/info?target=ID"
 ```
 
+### POST /device?target=ID
+设备模拟切换（手机/桌面视口、UA、触摸），body 为 JSON。**与 /eval、/screenshot 共用同一 CDP session**，切换后 proxy 各端点看到的效果一致；自动 reload 并返回验证结果。
+```bash
+# 预设:iphone / android / desktop / clear(还原)
+curl -s -X POST "http://localhost:3456/device?target=ID" -d '{"preset":"iphone"}'
+curl -s -X POST "http://localhost:3456/device?target=ID" -d '{"preset":"clear"}'
+# 自定义视口:宽高必填,dpr/mobile/ua 可选
+curl -s -X POST "http://localhost:3456/device?target=ID" -d '{"width":768,"height":1024,"dpr":2,"mobile":true}'
+```
+> 注意：Emulation 状态 per-session，模拟后影响该 tab 的渲染/截图/媒体查询，但 `window.innerWidth` 等 JS 值以同 session 的 /eval 为准；用完务必 `preset:"clear"` 还原。
+
 ### POST /eval?target=ID
 执行 JavaScript 表达式，POST body 为 JS 代码。
 ```bash
